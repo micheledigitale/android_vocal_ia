@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Assistente</string>
+    <string name="pulsante_pronto">Tieni premuto e parla</string>
+    <string name="pulsante_pronto_talkback">Tocca due volte per parlare</string>
+    <string name="pulsante_ascolto">Ti ascolto…</string>
+    <string name="pulsante_ascolto_talkback">Ti ascolto. Tocca due volte per finire</string>
+    <string name="pulsante_lavoro">Un momento…</string>
+    <string name="permesso_microfono">Serve il permesso del microfono per ascoltarti.</string>
+    <string name="mac_non_raggiungibile">Non riesco a collegarmi al Mac. Controlla il cavo e che l\'assistente sia avviato.</string>
+    <string name="audio_troppo_corto">Non ho sentito niente. Tieni premuto mentre parli.</string>
+</resources>
