@@ -38,7 +38,8 @@ quindi basta rispondere "Rossi".
 ### 1. Sul Mac
 
 ```bash
-brew install android-platform-tools python@3.11   # solo adb, niente Android Studio
+brew install python@3.11
+brew install --cask android-platform-tools   # solo adb, niente Android Studio
 cd android_vocal_ia
 python3.11 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt -r assistente/requirements.txt
