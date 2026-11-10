@@ -6,7 +6,7 @@ richiesta con un modello su OpenRouter e comanda il telefono via cavo.
 
 ```
 Pixel: app "Assistente"           Mac: python -m assistente            OpenRouter
-[tieni premuto] → registra  ──USB──► server :8765 ──audio + strumenti──► gemini-2.5-flash
+[tieni premuto] → registra  ──USB──► server :8765 ──audio + strumenti──► gemini-3.5-flash
 [rilascia]                          │◄──────────── strumento scelto ────┘
                                     ├─ comando diretto (adb): chiama, SMS, Wi-Fi…
                                     └─ agente M3A di AndroidWorld: guarda lo schermo e tocca
@@ -80,7 +80,7 @@ Con il server avviato: sul Pixel tieni premuto il pulsante giallo, parla,
 rilascia. Senti un bip all'inizio e uno alla fine, poi la risposta a voce.
 Con **TalkBack** attivo: doppio tocco per iniziare, doppio tocco per finire.
 
-Variabili utili: `ASSISTENTE_MODELLO` (default `google/gemini-2.5-flash`),
+Variabili utili: `ASSISTENTE_MODELLO` (default `google/gemini-3.5-flash`),
 `ASSISTENTE_SERIALE` (se hai più telefoni), `ASSISTENTE_PORTA` (8765),
 `ASSISTENTE_MAX_PASSI` (passi massimi dell'agente, 15).
 

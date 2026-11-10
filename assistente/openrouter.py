@@ -38,7 +38,7 @@ class OpenRouter:
       messaggi: list[dict[str, Any]],
       strumenti: Optional[list[dict[str, Any]]] = None,
       temperatura: float = 0.0,
-      max_token: int = 1000,
+      max_token: int = 4000,
   ) -> dict[str, Any]:
     """Restituisce il messaggio di risposta del modello (dict stile OpenAI)."""
     corpo: dict[str, Any] = {
@@ -46,6 +46,9 @@ class OpenRouter:
         'messages': messaggi,
         'temperature': temperatura,
         'max_tokens': max_token,
+        # I modelli che "ragionano" (es. Gemini 3.5) sono più lenti: per un
+        # assistente vocale basta un ragionamento breve. Ignorato dagli altri.
+        'reasoning': {'effort': 'low'},
     }
     if strumenti:
       corpo['tools'] = strumenti

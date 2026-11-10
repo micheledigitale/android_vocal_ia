@@ -34,9 +34,9 @@ class Config:
   """Impostazioni dell'assistente."""
 
   openrouter_api_key: str
-  modello: str = 'google/gemini-2.5-flash'
+  modello: str = 'google/gemini-3.5-flash'
   # Modello usato dall'agente che guarda lo schermo (deve accettare immagini).
-  modello_schermo: str = 'google/gemini-2.5-flash'
+  modello_schermo: str = 'google/gemini-3.5-flash'
   adb_path: str = ''
   # Numero di serie del telefono (vuoto = il primo collegato).
   seriale: str = ''
