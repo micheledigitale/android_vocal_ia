@@ -145,7 +145,9 @@ DEFINIZIONI = [
     ),
     _funzione(
         'descrivi_schermo',
-        'Descrive cosa c\'è ora sullo schermo del telefono.',
+        'Descrive cosa c\'è sullo schermo del telefono. L\'app Assistente'
+        ' viene tolta di mezzo prima: si vede la schermata Home o l\'app che'
+        ' era aperta sotto. Per contare le app, leggere icone o widget.',
         {'domanda': {**_STR, 'description': 'Cosa interessa sapere.'}},
     ),
     _funzione(
@@ -191,6 +193,7 @@ _APP = {
 _STREAM = {'chiamata': 0, 'suoneria': 2, 'media': 3, 'sveglia': 4}
 
 _PACCHETTO_MESSAGGI = 'com.google.android.apps.messaging'
+_PACCHETTO_APP = 'it.assistente.vocale'
 
 
 class Strumenti:
@@ -212,6 +215,10 @@ class Strumenti:
   # --- Supporto -----------------------------------------------------------
 
   def _shell(self, comando: list[str]) -> str:
+    return self._d.shell(comando)
+
+  def _shell_testo(self, comando: str) -> str:
+    """Comando shell scritto per intero (con pipe), senza quoting."""
     return self._d.shell(comando)
 
   def contatti(self, ricarica: bool = False) -> list[rubrica.Contatto]:
@@ -505,8 +512,30 @@ class Strumenti:
     )
     return f'Evento "{titolo}" {t_inizio:%d/%m alle %H:%M}: {esito}'
 
+  def _togli_assistente(self) -> None:
+    """Se davanti c'è l'app col pulsante, la toglie per guardare il telefono.
+
+    L'utente parla sempre dall'app Assistente, quindi lo schermo "vero" è
+    quello che c'è sotto: si torna alla Home (o all'app aperta prima, se
+    l'app Assistente era stata aperta sopra un'altra).
+    """
+    attiva = self._shell_testo(
+        'dumpsys activity activities'
+        " | grep -m1 -E 'topResumedActivity|mResumedActivity'")
+    if _PACCHETTO_APP not in attiva:
+      return
+    self._shell(['input', 'keyevent', 'KEYCODE_BACK'])
+    self._dormi(1.0)
+    if _PACCHETTO_APP in self._shell_testo(
+        'dumpsys activity activities'
+        " | grep -m1 -E 'topResumedActivity|mResumedActivity'"):
+      self._shell(['input', 'keyevent', 'KEYCODE_HOME'])
+      self._dormi(1.0)
+
   def _t_descrivi_schermo(self, domanda: str = '') -> str:
+    self._togli_assistente()
     return self._descrivi(domanda)
 
   def _t_usa_schermo(self, obiettivo: str) -> str:
+    self._togli_assistente()
     return self._agente(obiettivo)

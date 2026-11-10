@@ -16,10 +16,20 @@ class TelefonoFinto:
     self.comandi = []
     self.sms_inviati = []
     self.elementi = []
+    self.attiva = 'com.google.android.apps.nexuslauncher/.NexusLauncherActivity'
+    self.dopo_indietro = self.attiva
 
   def shell(self, comando):
+    if isinstance(comando, str):
+      comando = comando.split()
     self.comandi.append(list(comando))
     testo = ' '.join(comando)
+    if 'topResumedActivity' in testo:
+      return f'  topResumedActivity=ActivityRecord{{1 u0 {self.attiva} t9}}'
+    if comando[-1:] == ['KEYCODE_BACK']:
+      self.attiva = self.dopo_indietro
+    if comando[-1:] == ['KEYCODE_HOME']:
+      self.attiva = 'com.google.android.apps.nexuslauncher/.Launcher'
     if 'contacts/data/phones' in testo:
       return CONTATTI
     if 'content://sms/sent' in testo:
@@ -143,6 +153,23 @@ class StrumentiTest(absltest.TestCase):
   def test_usa_schermo(self):
     self.s.esegui('usa_schermo', {'obiettivo': 'Leggi l\'ultima email'})
     self.assertEqual(self.obiettivi_agente, ['Leggi l\'ultima email'])
+
+  def test_usa_schermo_non_tocca_altre_app(self):
+    self.s.esegui('usa_schermo', {'obiettivo': 'x'})
+    self.assertNotIn(['input', 'keyevent', 'KEYCODE_BACK'], self.tel.comandi)
+
+  def test_descrivi_schermo_toglie_assistente(self):
+    self.tel.attiva = 'it.assistente.vocale/.MainActivity'
+    self.tel.dopo_indietro = 'com.whatsapp/.Main'
+    self.s.esegui('descrivi_schermo', {'domanda': 'quante app ci sono?'})
+    self.assertIn(['input', 'keyevent', 'KEYCODE_BACK'], self.tel.comandi)
+    self.assertNotIn(['input', 'keyevent', 'KEYCODE_HOME'], self.tel.comandi)
+
+  def test_descrivi_schermo_va_alla_home_se_serve(self):
+    self.tel.attiva = 'it.assistente.vocale/.MainActivity'
+    self.tel.dopo_indietro = self.tel.attiva
+    self.s.esegui('descrivi_schermo', {})
+    self.assertIn(['input', 'keyevent', 'KEYCODE_HOME'], self.tel.comandi)
 
   def test_strumento_sconosciuto_e_argomenti_errati(self):
     self.assertStartsWith(self.s.esegui('vola', {}), 'ERRORE')
