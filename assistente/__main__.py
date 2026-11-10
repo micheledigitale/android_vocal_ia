@@ -9,6 +9,10 @@ Esempi:
 import argparse
 import logging
 import sys
+import warnings
+
+# Avvisi delle librerie Google usate da AndroidWorld: non ci riguardano.
+warnings.filterwarnings('ignore', category=FutureWarning)
 
 from assistente import cervello
 from assistente import config as config_lib
