@@ -26,6 +26,8 @@ class TelefonoFinto:
       return ''.join(
           f'Row: {i} address=+393331234567, date=1, body={b}\n'
           for i, b in enumerate(reversed(self.sms_inviati)))
+    if 'TorciaReceiver' in testo:
+      return 'Broadcast completed: result=1'
     if 'media_session' in testo and '--get' in testo:
       return 'volume is 5 in range [0..25]'
     if comando[:2] == ['input', 'tap']:
@@ -116,6 +118,13 @@ class StrumentiTest(absltest.TestCase):
                   self.tel.comandi)
     self.assertIn(['cmd', 'notification', 'set_dnd', 'priority'],
                   self.tel.comandi)
+
+  def test_torcia(self):
+    self.assertEqual(self.s.esegui('torcia', {'accesa': True}),
+                     'OK: torcia accesa.')
+    comando = self.tel.comandi[-1]
+    self.assertIn('it.assistente.vocale/.TorciaReceiver', comando)
+    self.assertEqual(comando[-2:], ['accesa', 'true'])
 
   def test_volume_percentuale(self):
     self.s.esegui('volume', {'azione': 'imposta', 'percentuale': 40})

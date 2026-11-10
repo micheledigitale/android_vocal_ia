@@ -113,6 +113,9 @@ DEFINIZIONI = [
         {'percentuale': {**_INT, 'description': '0-100.'}}, ['percentuale'],
     ),
     _funzione(
+        'torcia', 'Accende o spegne la torcia.', {'accesa': _BOOL}, ['accesa'],
+    ),
+    _funzione(
         'non_disturbare', 'Attiva o disattiva la modalità Non disturbare.',
         {'attivo': _BOOL}, ['attivo'],
     ),
@@ -412,6 +415,17 @@ class Strumenti:
     self._shell(['settings', 'put', 'system', 'screen_brightness',
                  str(max(1, valore))])
     return f'OK: luminosità al {percentuale}%.'
+
+  def _t_torcia(self, accesa: bool) -> str:
+    uscita = self._shell([
+        'am', 'broadcast', '-n', 'it.assistente.vocale/.TorciaReceiver',
+        '-a', 'it.assistente.vocale.TORCIA', '--ez', 'accesa',
+        'true' if accesa else 'false',
+    ])
+    if 'result=1' not in uscita:
+      return ('ERRORE: la torcia non risponde. Serve la versione 0.2'
+              ' dell\'app Assistente sul telefono.')
+    return f'OK: torcia {"accesa" if accesa else "spenta"}.'
 
   def _t_non_disturbare(self, attivo: bool) -> str:
     self._shell(['cmd', 'notification', 'set_dnd',

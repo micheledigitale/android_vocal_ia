@@ -39,5 +39,14 @@
                 <action android:name="it.assistente.vocale.INCOLLA" />
             </intent-filter>
         </receiver>
+
+        <receiver
+            android:name=".TorciaReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="it.assistente.vocale.TORCIA" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>
