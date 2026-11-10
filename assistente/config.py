@@ -7,6 +7,7 @@ import shutil
 _PERCORSI_ADB = (
     '/opt/homebrew/bin/adb',  # Homebrew su Mac con chip Apple.
     '/usr/local/bin/adb',  # Homebrew su Mac Intel.
+    os.path.expanduser('~/platform-tools/adb'),  # Download diretto da Google.
     os.path.expanduser('~/Library/Android/sdk/platform-tools/adb'),
     os.path.expanduser('~/Android/Sdk/platform-tools/adb'),
 )

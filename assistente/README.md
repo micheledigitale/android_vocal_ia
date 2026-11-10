@@ -40,6 +40,10 @@ quindi basta rispondere "Rossi".
 ```bash
 brew install python@3.11
 brew install --cask android-platform-tools   # solo adb, niente Android Studio
+# Se brew dà errore 404, scarica adb direttamente da Google:
+#   cd ~ && curl -LO https://dl.google.com/android/repository/platform-tools-latest-darwin.zip
+#   unzip -o platform-tools-latest-darwin.zip
+#   echo 'export PATH="$HOME/platform-tools:$PATH"' >> ~/.zshrc && source ~/.zshrc
 cd android_vocal_ia
 python3.11 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt -r assistente/requirements.txt
