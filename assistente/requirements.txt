@@ -1,0 +1,3 @@
+# Dipendenze in più rispetto ad AndroidWorld (requirements.txt nella radice).
+fastapi
+uvicorn
