@@ -32,6 +32,23 @@ class ClientMac(private val indirizzo: String = "http://127.0.0.1:8765") {
         }
     }
 
+    /** Frasi di avanzamento a partire dalla numero `da` (vuota se errore). */
+    fun avanzamento(da: Int): List<String> {
+        val connessione = URL("$indirizzo/avanzamento?da=$da").openConnection() as HttpURLConnection
+        return try {
+            connessione.connectTimeout = 1_000
+            connessione.readTimeout = 2_000
+            if (connessione.responseCode != 200) return emptyList()
+            val corpo = connessione.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            val frasi = JSONObject(corpo).optJSONArray("frasi") ?: return emptyList()
+            List(frasi.length()) { frasi.optString(it) }
+        } catch (e: Exception) {
+            emptyList()
+        } finally {
+            connessione.disconnect()
+        }
+    }
+
     fun raggiungibile(): Boolean {
         val connessione = URL("$indirizzo/stato").openConnection() as HttpURLConnection
         return try {

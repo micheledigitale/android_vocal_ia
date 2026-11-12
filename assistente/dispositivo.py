@@ -26,6 +26,7 @@ from android_world.env import adb_utils
 from android_world.env import interface
 from android_world.env import json_action
 from android_world.env import representation_utils
+from assistente import accessibilita
 import numpy as np
 from PIL import Image
 
@@ -77,6 +78,8 @@ class Dispositivo:
         )
     )
     self._parser = adb_call_parser.AdbCallParser(self._controller)
+    # Servizio di accessibilità dell'app: None = non ancora verificato.
+    self._accessibilita: bool | None = None
 
   # --- Interfaccia usata da android_world.env.adb_utils -------------------
 
@@ -121,8 +124,30 @@ class Dispositivo:
     larghezza, altezza = trovati[-1]
     return int(larghezza), int(altezza)
 
+  def usa_accessibilita(self) -> bool:
+    """True se il servizio di accessibilità dell'app risponde.
+
+    Al primo uso prova ad accenderlo da solo (come fare Impostazioni ›
+    Accessibilità › Assistente › attiva).
+    """
+    if self._accessibilita is None:
+      try:
+        self._accessibilita = accessibilita.attiva(self.shell)
+      except ErroreDispositivo as e:
+        logging.warning('Servizio di accessibilità non attivabile: %s', e)
+        self._accessibilita = False
+      if not self._accessibilita:
+        logging.warning('Servizio di accessibilità non attivo: uso'
+                        ' uiautomator (più lento).')
+    return self._accessibilita
+
   def elementi_schermo(self) -> list[representation_utils.UIElement]:
     """Elementi visibili sullo schermo (pulsanti, testi, campi)."""
+    if self.usa_accessibilita():
+      elementi = accessibilita.elementi(self.shell)
+      if elementi is not None:
+        return filtra_elementi(elementi)
+      logging.warning('Il servizio di accessibilità non risponde.')
     try:
       xml = adb_utils.uiautomator_dump(self)
     except Exception as e:  # pylint: disable=broad-exception-caught
@@ -140,8 +165,19 @@ class Dispositivo:
       return []
     return filtra_elementi(elementi)
 
-  def scrivi_testo(self, testo: str) -> None:
-    """Scrive nel campo selezionato, anche con lettere accentate."""
+  def scrivi_testo(self, testo: str, sostituisci: bool = False) -> None:
+    """Scrive nel campo selezionato, anche con lettere accentate.
+
+    Con `sostituisci` il contenuto del campo viene rimpiazzato, altrimenti il
+    testo si aggiunge a quello che c'è.
+    """
+    if self.usa_accessibilita() and accessibilita.scrivi(
+        self.shell, testo, sostituisci):
+      return
+    if sostituisci:
+      # Seleziona tutto (Ctrl+A) e cancella.
+      self.shell('input keycombination 113 29 && input keyevent 67')
+      time.sleep(0.3)
     if _solo_ascii(testo):
       adb_utils.type_text(testo, self, timeout_sec=15)
       return
@@ -255,10 +291,8 @@ class PixelEnv(interface.AsyncEnv):
           tocco, elementi, self.logical_screen_size, self._dispositivo
       )
       time.sleep(0.8)
-    if action.clear_text:
-      self._dispositivo.shell('input keycombination 113 29 && input keyevent 67')
-      time.sleep(0.5)
-    self._dispositivo.scrivi_testo(action.text or '')
+    self._dispositivo.scrivi_testo(action.text or '',
+                                   sostituisci=bool(action.clear_text))
 
   def display_message(self, message: str, header: str = '') -> None:
     logging.info('%s %s', header, message)

@@ -22,10 +22,12 @@ from assistente import server
 from assistente import strumenti as strumenti_lib
 
 
-def costruisci(cfg: config_lib.Config):
+def costruisci(cfg: config_lib.Config, avanzamento=None):
   d = dispositivo_lib.Dispositivo(cfg.adb_path, cfg.seriale)
   env = dispositivo_lib.PixelEnv(d)
-  client = openrouter.OpenRouter(cfg.openrouter_api_key, cfg.modello)
+  # Smistatore veloce (capisce il comando) ed esperto (usa lo schermo).
+  client = openrouter.OpenRouter(cfg.openrouter_api_key, cfg.modello,
+                                 ragionamento=cfg.ragionamento)
   client_schermo = openrouter.OpenRouter(
       cfg.openrouter_api_key, cfg.modello_schermo
   )
@@ -33,7 +35,9 @@ def costruisci(cfg: config_lib.Config):
       env, openrouter.OpenRouterMm(client_schermo), cfg.max_passi_schermo
   )
   descrittore = cervello.Descrittore(env, client_schermo)
-  strumenti = strumenti_lib.Strumenti(d, agente, descrittore)
+  strumenti = strumenti_lib.Strumenti(
+      d, agente, descrittore,
+      annuncia=avanzamento.annuncia if avanzamento else None)
   return d, strumenti, cervello.Assistente(client, strumenti)
 
 
@@ -64,6 +68,8 @@ def controlla(d: dispositivo_lib.Dispositivo, strumenti) -> int:
       'SMS': lambda: strumenti.esegui('leggi_sms', {'quanti': 1})[:60],
       'Chiamate': lambda: strumenti.esegui('chiamate_recenti', {'quante': 1})[:60],
       'Notifiche': lambda: strumenti.esegui('leggi_notifiche', {})[:60],
+      'Servizio di accessibilità': lambda: (
+          'attivo' if d.usa_accessibilita() else 'NON attivo (serve app 0.3)'),
       'App assistente installata': lambda: (
           dispositivo_lib.PACCHETTO_APP in d.shell(['pm', 'list', 'packages'])
       ),
@@ -93,7 +99,8 @@ def main(argv=None) -> int:
 
   try:
     cfg = config_lib.Config.da_ambiente()
-    d, strumenti, assistente = costruisci(cfg)
+    avanzamento = server.Avanzamento()
+    d, strumenti, assistente = costruisci(cfg, avanzamento)
   except (EnvironmentError, dispositivo_lib.ErroreDispositivo) as e:
     print(f'Errore: {e}', file=sys.stderr)
     return 1
@@ -112,7 +119,14 @@ def main(argv=None) -> int:
   d.inoltra_porta(cfg.porta)
   print(f'Assistente pronto sul telefono {d.seriale}.'
         ' Apri l\'app "Assistente" sul Pixel. Ctrl+C per uscire.')
-  app = server.crea_app(assistente, d.seriale, dopo_comando=riporta_app(d))
+  if d.usa_accessibilita():
+    print('Servizio di accessibilità attivo: lettura dello schermo veloce.')
+  else:
+    print('Servizio di accessibilità NON attivo: installa la versione 0.3'
+          ' dell\'app. Funziona lo stesso, ma più lentamente.')
+  print(f'Modelli: {cfg.modello} (comandi), {cfg.modello_schermo} (schermo).')
+  app = server.crea_app(assistente, d.seriale, dopo_comando=riporta_app(d),
+                        avanzamento=avanzamento)
   uvicorn.run(app, host='127.0.0.1',
               port=cfg.porta, log_level='warning')
   return 0

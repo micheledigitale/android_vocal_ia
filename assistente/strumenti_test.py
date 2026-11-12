@@ -32,6 +32,9 @@ class TelefonoFinto:
       self.attiva = 'com.google.android.apps.nexuslauncher/.Launcher'
     if 'contacts/data/phones' in testo:
       return CONTATTI
+    if 'content://sms/inbox' in testo:
+      return ('Row: 0 address=+393407654321, date=1700000000000,'
+              ' body=Arrivo tra dieci minuti\n')
     if 'content://sms/sent' in testo:
       return ''.join(
           f'Row: {i} address=+393331234567, date=1, body={b}\n'
@@ -50,6 +53,20 @@ class TelefonoFinto:
 
   def elementi_schermo(self):
     return self.elementi
+
+  def scrivi_testo(self, testo, sostituisci=False):
+    self.comandi.append(['scrivi', testo, sostituisci])
+    for e in self.elementi:
+      if e.is_editable:
+        e.text = testo if sostituisci else (e.text or '') + testo
+
+
+def campo(testo, x0=100, y0=2000):
+  bbox = representation_utils.BoundingBox(x0, x0 + 700, y0, y0 + 100)
+  return representation_utils.UIElement(
+      text=testo, bbox=bbox, bbox_pixels=bbox, is_editable=True,
+      class_name='android.widget.EditText',
+      package_name='com.google.android.apps.messaging')
 
 
 def pulsante(descrizione, x0=900, y0=2000):
@@ -70,8 +87,10 @@ class StrumentiTest(absltest.TestCase):
       self.obiettivi_agente.append(obiettivo)
       return 'OK: compito completato in 1 passi.'
 
+    self.annunci = []
     self.s = strumenti_lib.Strumenti(
-        self.tel, agente, lambda d: 'Schermo home.', attesa=lambda s: None)
+        self.tel, agente, lambda d: 'Schermo home.', attesa=lambda s: None,
+        annuncia=self.annunci.append)
 
   def test_definizioni_hanno_implementazione(self):
     for d in strumenti_lib.DEFINIZIONI:
@@ -106,6 +125,20 @@ class StrumentiTest(absltest.TestCase):
     self.assertIn(['input', 'tap', '950', '2050'], self.tel.comandi)
     self.assertEmpty(self.obiettivi_agente)
 
+  def test_invia_sms_rilegge_e_corregge_il_testo(self):
+    self.tel.elementi = [campo('Ciao come sta'), pulsante('Invia SMS')]
+    esito = self.s.esegui('invia_sms', {'destinatario': 'Mario Rossi',
+                                        'testo': 'Ciao, come stai?'})
+    self.assertIn(['scrivi', 'Ciao, come stai?', True], self.tel.comandi)
+    self.assertEqual(esito.parlato, 'SMS inviato a Mario Rossi.')
+    self.assertIn('Correggo il testo.', self.annunci)
+
+  def test_invia_sms_testo_giusto_non_riscrive(self):
+    self.tel.elementi = [campo('Ciao, come stai?'), pulsante('Invia SMS')]
+    self.s.esegui('invia_sms', {'destinatario': 'Mario Rossi',
+                                'testo': 'Ciao, come stai?'})
+    self.assertFalse(any(c[0] == 'scrivi' for c in self.tel.comandi))
+
   def test_invia_sms_senza_pulsante_usa_agente(self):
     esito = self.s.esegui('invia_sms', {'destinatario': 'Anna Verdi',
                                         'testo': 'Arrivo'})
@@ -116,6 +149,39 @@ class StrumentiTest(absltest.TestCase):
     esito = self.s.esegui('invia_sms', {'destinatario': 'Zorro',
                                         'testo': 'x'})
     self.assertStartsWith(esito, 'NON TROVATO')
+
+  def test_leggi_sms_parola_per_parola(self):
+    esito = self.s.esegui('leggi_sms', {'quanti': 1})
+    self.assertIsInstance(esito, strumenti_lib.Finale)
+    self.assertStartsWith(esito.parlato, 'Hai un messaggio. Da Anna Verdi,')
+    self.assertEndsWith(esito.parlato, ': Arrivo tra dieci minuti.')
+
+  def test_riassumi_sms_passa_dal_modello(self):
+    esito = self.s.esegui('leggi_sms', {'modalita': 'riassumi'})
+    self.assertNotIsInstance(esito, strumenti_lib.Finale)
+    self.assertIn('Arrivo tra dieci minuti', esito)
+
+  def test_crea_contatto_salva_senza_agente(self):
+    self.tel.elementi = [campo('Luca Neri'), campo('347 111 2222', y0=2200),
+                         pulsante('Salva', y0=200)]
+    orig = self.tel.shell
+
+    def shell(comando):
+      if 'contacts/data/phones' in ' '.join(comando) and any(
+          c[:2] == ['input', 'tap'] for c in self.tel.comandi):
+        return CONTATTI + 'Row: 3 display_name=Luca Neri, data1=3471112222\n'
+      return orig(comando)
+
+    self.tel.shell = shell
+    esito = self.s.esegui('crea_contatto', {'nome': 'Luca Neri',
+                                            'numero': '347 111 2222'})
+    self.assertEqual(esito.parlato, 'Ho salvato Luca Neri in rubrica.')
+    self.assertEmpty(self.obiettivi_agente)
+
+  def test_crea_contatto_campi_sbagliati_usa_agente(self):
+    self.tel.elementi = [campo('Luca'), pulsante('Salva', y0=200)]
+    self.s.esegui('crea_contatto', {'nome': 'Luca Neri', 'numero': '347'})
+    self.assertLen(self.obiettivi_agente, 1)
 
   def test_impostazioni(self):
     self.s.esegui('wifi', {'acceso': False})
@@ -131,7 +197,7 @@ class StrumentiTest(absltest.TestCase):
 
   def test_torcia(self):
     self.assertEqual(self.s.esegui('torcia', {'accesa': True}),
-                     'OK: torcia accesa.')
+                     'OK: Torcia accesa.')
     comando = self.tel.comandi[-1]
     self.assertIn('it.assistente.vocale/.TorciaReceiver', comando)
     self.assertEqual(comando[-2:], ['accesa', 'true'])

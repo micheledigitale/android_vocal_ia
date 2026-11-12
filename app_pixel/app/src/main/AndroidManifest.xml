@@ -48,5 +48,20 @@
                 <action android:name="it.assistente.vocale.TORCIA" />
             </intent-filter>
         </receiver>
+
+        <!-- Vede e scrive sullo schermo per conto del Mac (vedi
+             ServizioAccessibilita.kt). Il Mac lo attiva da solo via adb. -->
+        <service
+            android:name=".ServizioAccessibilita"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/servizio_accessibilita" />
+        </service>
     </application>
 </manifest>

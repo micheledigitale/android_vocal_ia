@@ -26,9 +26,13 @@ class OpenRouter:
       timeout: float = 60.0,
       tentativi: int = 3,
       sessione: Optional[requests.Session] = None,
+      ragionamento: str = 'low',
   ):
     self.api_key = api_key
     self.modello = modello
+    # 'none', 'minimal', 'low', 'medium', 'high': quanto il modello "pensa"
+    # prima di rispondere. Meno ragionamento = risposta più rapida.
+    self.ragionamento = ragionamento
     self.timeout = timeout
     self.tentativi = max(1, tentativi)
     self._http = sessione or requests.Session()
@@ -48,7 +52,7 @@ class OpenRouter:
         'max_tokens': max_token,
         # I modelli che "ragionano" (es. Gemini 3.5) sono più lenti: per un
         # assistente vocale basta un ragionamento breve. Ignorato dagli altri.
-        'reasoning': {'effort': 'low'},
+        'reasoning': {'effort': self.ragionamento},
     }
     if strumenti:
       corpo['tools'] = strumenti
@@ -68,6 +72,16 @@ class OpenRouter:
         if risposta.ok and dati.get('choices'):
           return dati['choices'][0]['message']
         ultimo_errore = str(dati.get('error', dati))
+        if (risposta.status_code == 400 and 'reasoning' in corpo
+            and ('reasoning' in ultimo_errore.lower()
+                 or 'effort' in ultimo_errore.lower()
+                 or 'thinking' in ultimo_errore.lower())):
+          # Il modello non accetta questo livello di ragionamento: riprova
+          # subito senza.
+          logging.warning('OpenRouter: %s. Riprovo senza "reasoning".',
+                          ultimo_errore)
+          corpo.pop('reasoning')
+          continue
       except (requests.RequestException, ValueError) as e:
         ultimo_errore = str(e)
       logging.warning('OpenRouter: %s. Riprovo tra %.0fs', ultimo_errore, attesa)

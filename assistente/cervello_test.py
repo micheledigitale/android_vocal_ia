@@ -3,6 +3,7 @@ import json
 from absl.testing import absltest
 from assistente import cervello
 from assistente import openrouter
+from assistente import strumenti as strumenti_lib
 
 try:
   from assistente import server  # pylint: disable=g-import-not-at-top
@@ -107,6 +108,23 @@ class AssistenteTest(absltest.TestCase):
     a = cervello.Assistente(modello, StrumentiFinti({}))
     self.assertIn('Riprova', a.rispondi(testo='ciao').testo)
 
+  def test_azione_diretta_senza_seconda_chiamata(self):
+    modello = ModelloFinto([chiamata_strumento('wifi', {'acceso': False})])
+    strumenti = StrumentiFinti(
+        {'wifi': strumenti_lib.Finale('OK: Wi-Fi spento.', 'Wi-Fi spento.')})
+    passi = iter(range(100))
+    a = cervello.Assistente(modello, strumenti,
+                            cronometro=lambda: float(next(passi)))
+
+    risposta = a.rispondi(testo='spegni il wifi')
+
+    self.assertEqual(risposta.testo, 'Wi-Fi spento.')
+    self.assertLen(modello.ricevuti, 1)  # una sola chiamata al modello
+    self.assertEqual(set(risposta.tempi), {'modello 1', 'wifi', 'totale'})
+    # La storia resta completa per il comando successivo.
+    self.assertEqual(a._turni[-1][-1],
+                     {'role': 'assistant', 'content': 'Wi-Fi spento.'})
+
   def test_niente_audio(self):
     a = cervello.Assistente(ModelloFinto([]), StrumentiFinti({}))
     self.assertIn('Non ho sentito', a.rispondi(audio=b'').testo)
@@ -131,6 +149,19 @@ class ServerTest(absltest.TestCase):
     self.assertEqual(r.json()['risposta'], 'Wi-Fi acceso.')
     r = client.post('/testo', json={'testo': 'ciao'})
     self.assertEqual(r.json()['risposta'], 'Ciao!')
+    self.assertIn('totale', r.json()['tempi'])
+
+  def test_avanzamento(self):
+    avanzamento = server.Avanzamento()
+    a = cervello.Assistente(ModelloFinto([]), StrumentiFinti({}))
+    client = testclient.TestClient(
+        server.crea_app(a, 'X', avanzamento=avanzamento))
+    avanzamento.annuncia('Apro la rubrica.')
+    avanzamento.annuncia('Premo Salva.')
+    self.assertEqual(client.get('/avanzamento?da=1').json(),
+                     {'frasi': ['Premo Salva.']})
+    avanzamento.nuovo_comando()
+    self.assertEqual(client.get('/avanzamento').json(), {'frasi': []})
 
 
 if __name__ == '__main__':

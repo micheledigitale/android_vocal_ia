@@ -9,4 +9,7 @@
     <string name="permesso_microfono">Serve il permesso del microfono per ascoltarti.</string>
     <string name="mac_non_raggiungibile">Non riesco a collegarmi al Mac. Controlla il cavo e che l\'assistente sia avviato.</string>
     <string name="audio_troppo_corto">Non ho sentito niente. Tieni premuto mentre parli.</string>
+    <string name="servizio_descrizione">Permette all\'assistente sul Mac di leggere lo schermo e scrivere nei campi di testo, solo quando glielo chiedi a voce.</string>
+    <string name="ok">Ok.</string>
+    <string name="ancora_al_lavoro">Sto ancora lavorando.</string>
 </resources>

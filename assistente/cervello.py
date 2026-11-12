@@ -30,7 +30,9 @@ punteggiatura corretta.
 - La risposta finale viene letta ad alta voce: una o due frasi brevi, \
 naturali, senza elenchi, simboli, emoji o markdown. Dì sempre l'esito reale \
 dell'azione così come lo riporta lo strumento; non inventare mai.
-- Quando leggi SMS, notifiche, chiamate o email, riassumi: chi, cosa, quando.
+- SMS e notifiche: se l'utente dice "leggi" (o chiede cosa dicono) usa \
+modalita "leggi": il testo verrà letto parola per parola. Usa "riassumi" \
+solo se chiede un riassunto; allora riassumi tu: chi, cosa, quando.
 - Per Gmail, WhatsApp e ciò che non ha uno strumento diretto usa \
 usa_schermo con un obiettivo completo e preciso.
 - Se l'audio non si capisce, chiedi di ripetere.
@@ -43,10 +45,15 @@ _DURATA_MEMORIA_S = 180
 _MAX_GIRI = 8
 
 
+_tempi = logging.getLogger('assistente.tempi')
+
+
 @dataclasses.dataclass
 class Risposta:
   testo: str
   azioni: list[str] = dataclasses.field(default_factory=list)
+  # Durata di ogni fase in secondi, es. {'modello 1': 1.2, 'invia_sms': 4.0}.
+  tempi: dict[str, float] = dataclasses.field(default_factory=dict)
 
 
 class AgenteSchermo:
@@ -115,7 +122,9 @@ class Assistente:
       client: openrouter.OpenRouter,
       strumenti: strumenti_lib.Strumenti,
       orologio=time.time,
+      cronometro=time.monotonic,
   ):
+    self._cronometro = cronometro
     self._client = client
     self._strumenti = strumenti
     self._orologio = orologio
@@ -145,9 +154,26 @@ class Assistente:
     if not audio and not testo:
       return Risposta('Non ho sentito niente. Tieni premuto e parla.')
     with self._lock:
-      return self._rispondi(audio, testo)
+      inizio = self._cronometro()
+      tempi: dict[str, float] = {}
+      risposta = self._rispondi(audio, testo, tempi)
+      tempi['totale'] = self._cronometro() - inizio
+      risposta.tempi = {k: round(v, 2) for k, v in tempi.items()}
+      _tempi.info('Tempi: %s', ', '.join(
+          f'{k} {v:.1f}s' for k, v in risposta.tempi.items()))
+      return risposta
 
-  def _rispondi(self, audio: Optional[bytes], testo: Optional[str]) -> Risposta:
+  def _misura(self, tempi: dict[str, float], nome: str, funzione, *args,
+              **kwargs):
+    inizio = self._cronometro()
+    try:
+      return funzione(*args, **kwargs)
+    finally:
+      # Se lo stesso strumento gira due volte, i tempi si sommano.
+      tempi[nome] = tempi.get(nome, 0.0) + self._cronometro() - inizio
+
+  def _rispondi(self, audio: Optional[bytes], testo: Optional[str],
+                tempi: dict[str, float]) -> Risposta:
     adesso = self._orologio()
     if adesso - self._ultimo_comando > _DURATA_MEMORIA_S:
       self._turni = []
@@ -169,10 +195,11 @@ class Assistente:
     nuovi: list[dict[str, Any]] = [ricordo]
     azioni: list[str] = []
 
-    for _ in range(_MAX_GIRI):
+    for giro in range(_MAX_GIRI):
       try:
-        risposta = self._client.chat(
-            messaggi, strumenti=strumenti_lib.DEFINIZIONI
+        risposta = self._misura(
+            tempi, f'modello {giro + 1}', self._client.chat,
+            messaggi, strumenti=strumenti_lib.DEFINIZIONI,
         )
       except openrouter.ErroreOpenRouter as e:
         logging.error('OpenRouter non risponde: %s', e)
@@ -192,6 +219,7 @@ class Assistente:
       }
       messaggi.append(assistente_msg)
       nuovi.append(assistente_msg)
+      risultati = []
       for chiamata in chiamate:
         nome = chiamata['function']['name']
         try:
@@ -199,17 +227,27 @@ class Assistente:
         except json.JSONDecodeError:
           argomenti = {}
         logging.info('Strumento %s %s', nome, argomenti)
-        risultato = self._strumenti.esegui(nome, argomenti)
+        risultato = self._misura(
+            tempi, nome, self._strumenti.esegui, nome, argomenti)
+        risultati.append(risultato)
         logging.info(' -> %s', risultato)
         azioni.append(f'{nome}: {risultato}')
         risposta_strumento = {
             'role': 'tool',
             'tool_call_id': chiamata.get('id', nome),
             'name': nome,
-            'content': risultato,
+            'content': str(risultato),
         }
         messaggi.append(risposta_strumento)
         nuovi.append(risposta_strumento)
+
+      # Azioni dirette riuscite: la frase è già pronta, niente seconda
+      # chiamata al modello (si risparmiano 1-3 secondi).
+      if all(isinstance(r, strumenti_lib.Finale) for r in risultati):
+        finale = ' '.join(r.parlato for r in risultati)
+        nuovi.append({'role': 'assistant', 'content': finale})
+        self._turni = (self._turni + [nuovi])[-4:]
+        return Risposta(finale, azioni)
 
     self._turni = []
     return Risposta('Non sono riuscito a finire. Prova a dirlo in un altro'

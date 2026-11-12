@@ -36,6 +36,10 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     private val registratore = Registratore()
     private val client = ClientMac()
     private val esecutore = Executors.newSingleThreadExecutor()
+    // Chiede al Mac le frasi di avanzamento mentre aspettiamo la risposta.
+    private val sonda = Executors.newSingleThreadExecutor()
+    @Volatile private var inAttesa = false
+    @Volatile private var ultimaVoce = 0L
     private val principale = Handler(Looper.getMainLooper())
     private var voce: TextToSpeech? = null
     private var vocePronta = false
@@ -66,6 +70,16 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         voce?.shutdown()
         toni?.release()
         esecutore.shutdownNow()
+        sonda.shutdownNow()
+    }
+
+    /**
+     * Indietro non chiude l'app ma la manda dietro: così il Mac può guardare
+     * lo schermo sotto mentre noi aspettiamo la risposta da leggere.
+     */
+    @Deprecated("Gestione classica del tasto Indietro")
+    override fun onBackPressed() {
+        moveTaskToBack(true)
     }
 
     override fun onInit(esito: Int) {
@@ -187,21 +201,63 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             val frase = if (registratore.durataSecondi(wav) < 0.4) {
                 getString(R.string.audio_troppo_corto)
             } else {
-                client.inviaComando(wav) ?: getString(R.string.mac_non_raggiungibile)
+                avviaSonda()
+                try {
+                    client.inviaComando(wav) ?: getString(R.string.mac_non_raggiungibile)
+                } finally {
+                    inAttesa = false
+                }
             }
             principale.post {
                 risposta.text = frase
                 aggiorna(Stato.PRONTO)
-                parla(frase)
+                parla(frase, accoda = true)
+            }
+        }
+    }
+
+    /**
+     * Mentre il Mac lavora: dice "Ok" se la risposta tarda, legge gli avvisi
+     * ("Apro la rubrica") e, se resta zitto a lungo, "Sto ancora lavorando".
+     */
+    private fun avviaSonda() {
+        inAttesa = true
+        val inizio = System.currentTimeMillis()
+        ultimaVoce = 0L
+        sonda.execute {
+            var letti = 0
+            var detto = false
+            while (inAttesa) {
+                try {
+                    Thread.sleep(600)
+                } catch (e: InterruptedException) {
+                    return@execute
+                }
+                if (!inAttesa) break
+                val frasi = client.avanzamento(letti)
+                letti += frasi.size
+                val adesso = System.currentTimeMillis()
+                val daDire = when {
+                    frasi.isNotEmpty() -> frasi.joinToString(" ")
+                    !detto && adesso - inizio > 1_200 -> getString(R.string.ok)
+                    detto && adesso - ultimaVoce > 15_000 -> getString(R.string.ancora_al_lavoro)
+                    else -> null
+                }
+                if (daDire != null && inAttesa) {
+                    detto = true
+                    ultimaVoce = adesso
+                    principale.post { if (stato == Stato.LAVORO) parla(daDire, accoda = true) }
+                }
             }
         }
     }
 
     // --- Voce e permessi --------------------------------------------------
 
-    private fun parla(frase: String) {
+    private fun parla(frase: String, accoda: Boolean = false) {
         if (vocePronta) {
-            voce?.speak(frase, TextToSpeech.QUEUE_FLUSH, null, "risposta")
+            val modo = if (accoda) TextToSpeech.QUEUE_ADD else TextToSpeech.QUEUE_FLUSH
+            voce?.speak(frase, modo, null, "risposta")
         } else {
             pulsante.announceForAccessibility(frase)
         }

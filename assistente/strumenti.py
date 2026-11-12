@@ -17,6 +17,27 @@ from assistente import rubrica
 
 AgenteSchermo = Callable[[str], str]
 Descrittore = Callable[[str], str]
+Annuncio = Callable[[str], None]
+
+
+class Finale(str):
+  """Risultato che non ha bisogno del modello per essere detto a voce.
+
+  Il testo (quello che vede il modello nella storia) resta lo stesso; in più
+  porta `parlato`, la frase già pronta da leggere. Se tutti gli strumenti di
+  un giro rispondono così, il cervello salta la seconda chiamata al modello.
+  """
+
+  parlato: str
+
+  def __new__(cls, testo: str, parlato: str = ''):
+    oggetto = super().__new__(cls, testo)
+    oggetto.parlato = parlato or testo.removeprefix('OK: ')
+    return oggetto
+
+
+def _ok(frase: str) -> Finale:
+  return Finale(f'OK: {frase}', frase)
 
 
 def _funzione(nome: str, descrizione: str, parametri: dict[str, Any],
@@ -36,6 +57,11 @@ def _funzione(nome: str, descrizione: str, parametri: dict[str, Any],
 
 
 _STR = {'type': 'string'}
+_MODALITA = {
+    'type': 'string', 'enum': ['leggi', 'riassumi'],
+    'description': 'leggi (default): l\'utente vuole sentire il testo esatto,'
+                   ' parola per parola. riassumi: solo se chiede un riassunto.',
+}
 _INT = {'type': 'integer'}
 _BOOL = {'type': 'boolean'}
 
@@ -60,11 +86,12 @@ DEFINIZIONI = [
     ),
     _funzione(
         'leggi_sms',
-        'Legge gli ultimi SMS ricevuti (o inviati).',
+        'Legge o riassume gli ultimi SMS ricevuti (o inviati).',
         {
             'quanti': {**_INT, 'description': 'Quanti messaggi (default 5).'},
             'da': {**_STR, 'description': 'Solo quelli di questo contatto.'},
             'inviati': {**_BOOL, 'description': 'True per gli SMS inviati.'},
+            'modalita': _MODALITA,
         },
     ),
     _funzione(
@@ -86,7 +113,8 @@ DEFINIZIONI = [
         {'nome': _STR, 'numero': _STR}, ['nome', 'numero'],
     ),
     _funzione(
-        'leggi_notifiche', 'Legge le notifiche presenti sul telefono.', {},
+        'leggi_notifiche', 'Legge o riassume le notifiche del telefono.',
+        {'modalita': _MODALITA},
     ),
     _funzione(
         'wifi', 'Accende o spegne il Wi-Fi.', {'acceso': _BOOL}, ['acceso'],
@@ -205,11 +233,14 @@ class Strumenti:
       agente_schermo: AgenteSchermo,
       descrittore: Descrittore,
       attesa: Callable[[float], None] = time.sleep,
+      annuncia: Optional[Annuncio] = None,
   ):
     self._d = dispositivo
     self._agente = agente_schermo
     self._descrivi = descrittore
     self._dormi = attesa
+    # Frasi brevi lette dall'app mentre lavoriamo ("Apro la rubrica").
+    self._annuncia = annuncia or (lambda frase: None)
     self._contatti: Optional[list[rubrica.Contatto]] = None
 
   # --- Supporto -----------------------------------------------------------
@@ -268,23 +299,26 @@ class Strumenti:
       return nome
     self._shell(['am', 'start', '-a', 'android.intent.action.CALL',
                  '-d', f'tel:{numero}'])
-    return f'OK: sto chiamando {nome} ({numero}).'
+    return Finale(f'OK: sto chiamando {nome} ({numero}).',
+                  f'Sto chiamando {nome}.')
 
   def _t_chiudi_chiamata(self) -> str:
     self._shell(['input', 'keyevent', 'KEYCODE_ENDCALL'])
-    return 'OK: chiamata chiusa.'
+    return _ok('chiamata chiusa.')
 
   def _t_invia_sms(self, destinatario: str, testo: str) -> str:
     numero, nome = self._risolvi(destinatario)
     if numero is None:
       return nome
+    self._annuncia(f'Scrivo a {nome}.')
     prima = self._ultimo_sms_inviato()
     self._shell([
         'am', 'start', '-a', 'android.intent.action.SENDTO',
         '-d', f'smsto:{numero}', '--es', 'sms_body', testo,
         '--ez', 'exit_on_sent', 'true',
     ])
-    self._dormi(2.5)
+    self._dormi(2.0)
+    self._controlla_testo(testo, _PACCHETTO_MESSAGGI)
     if not self._premi_invio():
       esito = self._agente(
           'Nella conversazione aperta in Messaggi il testo è già scritto:'
@@ -296,7 +330,7 @@ class Strumenti:
       self._dormi(1.0)
       ultimo = self._ultimo_sms_inviato()
       if ultimo and ultimo != prima and ultimo.testo == testo.strip():
-        return f'OK: SMS inviato a {nome}.'
+        return _ok(f'SMS inviato a {nome}.')
     return (
         f'PROBABILE: ho premuto Invia per {nome}, ma non vedo l\'SMS tra gli'
         ' inviati (può essere un messaggio chat/RCS).'
@@ -311,21 +345,58 @@ class Strumenti:
 
   def _premi_invio(self) -> bool:
     """Tocca il pulsante Invia di Google Messaggi, se lo trova."""
+    return self._premi(
+        r'\b(invia|send)\b|send_message_button|compose:draft:send',
+        _PACCHETTO_MESSAGGI)
+
+  def _premi(self, schema: str, pacchetto: str = '') -> bool:
+    """Tocca il primo pulsante la cui etichetta corrisponde a `schema`."""
     for e in self._d.elementi_schermo():
-      if e.package_name and e.package_name != _PACCHETTO_MESSAGGI:
+      if pacchetto and e.package_name and e.package_name != pacchetto:
         continue
       etichetta = ' '.join(
           filter(None, [e.content_description, e.resource_id, e.text])
       ).lower()
-      if re.search(r'\b(invia|send)\b|send_message_button|compose:draft:send',
-                   etichetta) and e.bbox_pixels is not None:
+      if re.search(schema, etichetta) and e.bbox_pixels is not None:
         x, y = e.bbox_pixels.center
         self._shell(['input', 'tap', str(int(x)), str(int(y))])
         return True
     return False
 
+  def _controlla_testo(self, atteso: str, pacchetto: str) -> bool:
+    """Rilegge il campo di testo e, se è sbagliato, lo riscrive.
+
+    È la "rilettura" prima di inviare: confronta quello che c'è davvero nel
+    campo con il testo dettato. Restituisce True se alla fine coincide.
+    """
+    def campo():
+      for e in self._d.elementi_schermo():
+        if e.is_editable and (not e.package_name
+                              or e.package_name == pacchetto):
+          return e
+      return None
+
+    pulito = lambda t: ' '.join((t or '').split())
+    e = campo()
+    if e is None:
+      logging.info('Rilettura: nessun campo di testo trovato.')
+      return False
+    if pulito(e.text) == pulito(atteso):
+      return True
+    logging.info('Rilettura: nel campo c\'è %r invece di %r. Correggo.',
+                 e.text, atteso)
+    self._annuncia('Correggo il testo.')
+    if e.bbox_pixels is not None:
+      x, y = e.bbox_pixels.center
+      self._shell(['input', 'tap', str(int(x)), str(int(y))])
+      self._dormi(0.5)
+    self._d.scrivi_testo(atteso, sostituisci=True)
+    self._dormi(0.5)
+    e = campo()
+    return e is not None and pulito(e.text) == pulito(atteso)
+
   def _t_leggi_sms(self, quanti: int = 5, da: str = '',
-                   inviati: bool = False) -> str:
+                   inviati: bool = False, modalita: str = 'leggi') -> str:
     contatti = self.contatti()
     messaggi = rubrica.leggi_sms(
         self._shell, contatti, quanti=50 if da else quanti,
@@ -339,8 +410,17 @@ class Strumenti:
           or rubrica.stesso_numero(da, m.mittente)
       ][:quanti]
     if not messaggi:
-      return 'Nessun SMS trovato.'
-    return json.dumps([m.__dict__ for m in messaggi], ensure_ascii=False)
+      return _ok(f'Non ho trovato messaggi{" da " + da if da else ""}.')
+    dati = json.dumps([m.__dict__ for m in messaggi], ensure_ascii=False)
+    if modalita == 'riassumi':
+      return dati
+    frasi = [
+        f'{"A" if inviati else "Da"} {m.mittente}, {_quando(m.quando)}:'
+        f' {_punto(m.testo)}'
+        for m in messaggi
+    ]
+    return Finale(dati, f'{_quanti(len(messaggi), "messaggio", "messaggi")}.'
+                  f' {" ".join(frasi)}')
 
   def _t_chiamate_recenti(self, quante: int = 5,
                           solo_perse: bool = False) -> str:
@@ -350,8 +430,11 @@ class Strumenti:
     if solo_perse:
       chiamate = [c for c in chiamate if c.tipo == 'persa'][:quante]
     if not chiamate:
-      return 'Nessuna chiamata trovata.'
-    return json.dumps([c.__dict__ for c in chiamate], ensure_ascii=False)
+      return _ok('Non ci sono chiamate recenti.' if not solo_perse
+                 else 'Non hai chiamate perse.')
+    dati = json.dumps([c.__dict__ for c in chiamate], ensure_ascii=False)
+    frasi = [f'{c.chi}, {c.tipo}, {_quando(c.quando)}.' for c in chiamate]
+    return Finale(dati, ' '.join(frasi))
 
   def _t_cerca_contatto(self, nome: str) -> str:
     esito = rubrica.cerca_contatto(nome, self.contatti(ricarica=True))
@@ -365,32 +448,60 @@ class Strumenti:
         '-t', 'vnd.android.cursor.dir/contact',
         '-e', 'name', nome, '-e', 'phone', numero,
     ])
-    self._dormi(2.5)
-    esito = self._agente(
-        f'Si è aperta la schermata di un nuovo contatto con nome "{nome}" e'
-        f' numero "{numero}" già compilati. Controlla e premi Salva.'
-    )
-    self._contatti = None
-    if any(rubrica.stesso_numero(numero, c.numero) for c in self.contatti()):
-      return f'OK: contatto {nome} salvato.'
+    self._annuncia('Apro la rubrica.')
+    self._dormi(2.0)
+    esito = 'salvato direttamente'
+    if not self._campi_compilati(nome, numero) or not self._premi(
+        r'\b(salva|save|fatto|done)\b|editor_menu_save|menu_save'):
+      self._annuncia('Uso lo schermo per salvare.')
+      esito = self._agente(
+          f'Si è aperta la schermata di un nuovo contatto con nome "{nome}" e'
+          f' numero "{numero}" già compilati. Controlla che siano giusti,'
+          ' correggili se serve, e premi Salva.'
+      )
+    for _ in range(4):
+      self._dormi(1.0)
+      self._contatti = None
+      if any(rubrica.stesso_numero(numero, c.numero)
+             for c in self.contatti()):
+        return _ok(f'Ho salvato {nome} in rubrica.')
     return f'NON CONFERMATO: non trovo ancora {nome} in rubrica. ({esito})'
 
-  def _t_leggi_notifiche(self) -> str:
-    notifiche = rubrica.leggi_notifiche(self._shell)
+  def _campi_compilati(self, nome: str, numero: str) -> bool:
+    """Rilettura del modulo contatto: nome e numero sono quelli giusti?"""
+    testi = [e.text or '' for e in self._d.elementi_schermo() if e.is_editable]
+    tutto = ' '.join(testi).lower()
+    cifre = re.sub(r'\D', '', ' '.join(testi))
+    ok_nome = all(p.lower() in tutto for p in nome.split())
+    ok_numero = re.sub(r'\D', '', numero)[-9:] in cifre
+    if not (ok_nome and ok_numero):
+      logging.info('Rilettura contatto non riuscita: %s', testi)
+    return ok_nome and ok_numero
+
+  def _t_leggi_notifiche(self, modalita: str = 'leggi') -> str:
+    notifiche = rubrica.leggi_notifiche(self._shell)[:15]
     if not notifiche:
-      return 'Nessuna notifica.'
-    return json.dumps([n.__dict__ for n in notifiche[:15]], ensure_ascii=False)
+      return _ok('Non hai notifiche.')
+    dati = json.dumps([n.__dict__ for n in notifiche], ensure_ascii=False)
+    if modalita == 'riassumi':
+      return dati
+    frasi = []
+    for n in notifiche:
+      chi = ', '.join(x for x in (n.app, n.titolo) if x)
+      frasi.append(f'{chi}: {_punto(n.testo)}' if n.testo else _punto(chi))
+    return Finale(dati, f'{_quanti(len(notifiche), "notifica", "notifiche")}.'
+                  f' {" ".join(frasi)}')
 
   def _t_wifi(self, acceso: bool) -> str:
     self._shell(['svc', 'wifi', 'enable' if acceso else 'disable'])
-    return f'OK: Wi-Fi {"acceso" if acceso else "spento"}.'
+    return _ok(f'Wi-Fi {"acceso" if acceso else "spento"}.')
 
   def _t_bluetooth(self, acceso: bool) -> str:
     azione = 'enable' if acceso else 'disable'
     uscita = self._shell(['svc', 'bluetooth', azione])
     if 'unknown' in uscita.lower() or 'usage' in uscita.lower():
       self._shell(['cmd', 'bluetooth_manager', azione])
-    return f'OK: Bluetooth {"acceso" if acceso else "spento"}.'
+    return _ok(f'Bluetooth {"acceso" if acceso else "spento"}.')
 
   def _t_volume(self, azione: str, percentuale: Optional[int] = None,
                 tipo: str = 'media') -> str:
@@ -399,7 +510,7 @@ class Strumenti:
       tasto = 'KEYCODE_VOLUME_UP' if azione == 'alza' else 'KEYCODE_VOLUME_DOWN'
       for _ in range(2):
         self._shell(['input', 'keyevent', tasto])
-      return f'OK: volume {"alzato" if azione == "alza" else "abbassato"}.'
+      return _ok(f'Volume {"alzato" if azione == "alza" else "abbassato"}.')
     if azione == 'muto':
       percentuale = 0
     if percentuale is None:
@@ -408,7 +519,7 @@ class Strumenti:
     livello = round(max(0, min(100, percentuale)) * massimo / 100)
     self._shell(['cmd', 'media_session', 'volume', '--stream', str(stream),
                  '--set', str(livello)])
-    return f'OK: volume {tipo} al {percentuale}%.'
+    return _ok(f'Volume {tipo} al {percentuale} per cento.')
 
   def _volume_massimo(self, stream: int) -> int:
     uscita = self._shell(['cmd', 'media_session', 'volume', '--stream',
@@ -421,7 +532,7 @@ class Strumenti:
     self._shell(['settings', 'put', 'system', 'screen_brightness_mode', '0'])
     self._shell(['settings', 'put', 'system', 'screen_brightness',
                  str(max(1, valore))])
-    return f'OK: luminosità al {percentuale}%.'
+    return _ok(f'Luminosità al {percentuale} per cento.')
 
   def _t_torcia(self, accesa: bool) -> str:
     uscita = self._shell([
@@ -432,12 +543,12 @@ class Strumenti:
     if 'result=1' not in uscita:
       return ('ERRORE: la torcia non risponde. Serve la versione 0.2'
               ' dell\'app Assistente sul telefono.')
-    return f'OK: torcia {"accesa" if accesa else "spenta"}.'
+    return _ok(f'Torcia {"accesa" if accesa else "spenta"}.')
 
   def _t_non_disturbare(self, attivo: bool) -> str:
     self._shell(['cmd', 'notification', 'set_dnd',
                  'priority' if attivo else 'off'])
-    return f'OK: Non disturbare {"attivo" if attivo else "disattivato"}.'
+    return _ok(f'Non disturbare {"attivo" if attivo else "disattivato"}.')
 
   def _t_apri_app(self, nome: str) -> str:
     chiave = nome.strip().lower()
@@ -448,7 +559,7 @@ class Strumenti:
       return f'NON TROVATA: non trovo un\'app chiamata "{nome}".'
     self._shell(['monkey', '-p', pacchetto, '-c',
                  'android.intent.category.LAUNCHER', '1'])
-    return f'OK: ho aperto {nome}.'
+    return _ok(f'Ho aperto {nome}.')
 
   def _cerca_pacchetto(self, nome: str) -> Optional[str]:
     uscita = self._shell(['pm', 'list', 'packages'])
@@ -504,6 +615,7 @@ class Strumenti:
     ]
     if luogo:
       comando += ['--es', 'eventLocation', luogo]
+    self._annuncia('Apro il calendario.')
     self._shell(comando)
     self._dormi(2.5)
     esito = self._agente(
@@ -533,9 +645,38 @@ class Strumenti:
       self._dormi(1.0)
 
   def _t_descrivi_schermo(self, domanda: str = '') -> str:
+    self._annuncia('Guardo lo schermo.')
     self._togli_assistente()
     return self._descrivi(domanda)
 
   def _t_usa_schermo(self, obiettivo: str) -> str:
+    self._annuncia('Ci penso io, ci vorrà un po\'.')
     self._togli_assistente()
     return self._agente(obiettivo)
+
+
+def _quanti(n: int, singolare: str, plurale: str) -> str:
+  return f'Hai un {singolare}' if n == 1 else f'Hai {n} {plurale}'
+
+
+def _punto(testo: str) -> str:
+  testo = ' '.join((testo or '').split())
+  return testo if testo[-1:] in '.!?' else testo + '.'
+
+
+def _quando(quando: str) -> str:
+  """'12/11 10:32' -> 'oggi alle 10:32' / 'ieri alle ...' / 'il 10/11 alle ...'."""
+  try:
+    data = datetime.datetime.strptime(quando, '%d/%m %H:%M')
+  except ValueError:
+    return quando
+  oggi = datetime.date.today()
+  giorno = data.replace(year=oggi.year).date()
+  if giorno > oggi:  # A gennaio, un messaggio di dicembre.
+    giorno = giorno.replace(year=oggi.year - 1)
+  ora = data.strftime('%H:%M')
+  if giorno == oggi:
+    return f'oggi alle {ora}'
+  if giorno == oggi - datetime.timedelta(days=1):
+    return f'ieri alle {ora}'
+  return f'il {giorno.day}/{giorno.month} alle {ora}'

@@ -34,9 +34,14 @@ class Config:
   """Impostazioni dell'assistente."""
 
   openrouter_api_key: str
-  modello: str = 'google/gemini-3.5-flash'
-  # Modello usato dall'agente che guarda lo schermo (deve accettare immagini).
+  # Smistatore: ascolta il comando e sceglie lo strumento. Deve essere
+  # veloce e accettare l'audio.
+  modello: str = 'google/gemini-3.5-flash-lite'
+  # Esperto: agente che guarda lo schermo e descrizioni (deve accettare
+  # immagini). Più lento ma più affidabile.
   modello_schermo: str = 'google/gemini-3.5-flash'
+  # Ragionamento dello smistatore ('none', 'minimal', 'low', ...).
+  ragionamento: str = 'minimal'
   adb_path: str = ''
   # Numero di serie del telefono (vuoto = il primo collegato).
   seriale: str = ''
@@ -52,11 +57,15 @@ class Config:
           'Manca la chiave OpenRouter: esegui'
           ' export OPENROUTER_API_KEY=la-tua-chiave'
       )
-    modello = os.environ.get('ASSISTENTE_MODELLO', cls.modello)
     return cls(
         openrouter_api_key=chiave,
-        modello=modello,
-        modello_schermo=os.environ.get('ASSISTENTE_MODELLO_SCHERMO', modello),
+        modello=os.environ.get('ASSISTENTE_MODELLO', cls.modello),
+        modello_schermo=os.environ.get(
+            'ASSISTENTE_MODELLO_SCHERMO', cls.modello_schermo
+        ),
+        ragionamento=os.environ.get(
+            'ASSISTENTE_RAGIONAMENTO', cls.ragionamento
+        ),
         adb_path=trova_adb(),
         seriale=os.environ.get('ASSISTENTE_SERIALE', ''),
         porta=int(os.environ.get('ASSISTENTE_PORTA', cls.porta)),
